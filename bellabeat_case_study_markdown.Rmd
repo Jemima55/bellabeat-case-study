@@ -1,0 +1,302 @@
+---
+title: "Bellabeat Case Study"
+author: "Jemima John-Udhe"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+This is a case study using Bellabeat. Bellabeat is a successful small company, but they have the potential to become a larger player in the global smart device market. Urška Sršen, cofounder and Chief Creative Officer of Bellabeat, believes that analyzing smart device fitness data could help unlock new growth opportunities for the company. My role is to analyse the data available and give insightful recommendations to move the company forward. For more info on the case study, you can  [Download the original Bellabeat case study PDF](https://drive.google.com/file/d/1ROYJdU5MwfcVvs0QtGohiNvSmhsbm4JT/view?usp=drive_link)
+
+Business Task:
+*Analyse trends in how users use smart devices
+
+*Recommend how Bellabeat can leverage those trends to market a product better
+
+I wasn’t able to include insights for the Spring product because there was no hydration data available in the datasets. Based on the data provided, the most relevant products for analysis are the Bellabeat app, Leaf, and Time.
+
+For this case study, I’ve chosen to focus on the Leaf product. While I don't have access to stress-related data, I’ll be analyzing the available information on activity, sleep, and weight logs.
+
+*The activity dataset gives a full overview of user movement, including steps and intensity levels, so additional datasets on those aren’t needed.
+*The sleep dataset captures user sleep patterns.
+*The weight log serves as a useful measure of user engagement with the device.
+
+## Data Sources
+For this case study, I used the FitBit Fitness Tracker Data uploaded by Möbius on Kaggle
+
+## Setting Up My Datasets
+
+I originally wanted to use a spreadsheet to do the exploratory data analysis on my datasets, but some of the .csv files were to large to be loaded on the spreadsheets. I then attempted to use BigQuery to load the datasets, but as I had no idea what was in the tables, I could not manually edit the schema of the tables. When I used the automatic detection of schema, the heartrate_seconds table brought some errors due to the inability of the system to read the datetime column. I ended up using R to implement the entire project. I'm sure there are workarounds to the problems I mentioned earlier but I haven't figured them out yet. 
+
+I first installed the tidyverse and lubridate packages
+```{r install tidyverse and lubridate}
+install.packages("tidyverse")
+install.packages("lubridate")
+
+library(tidyverse)
+library(lubridate)
+
+```
+
+
+## Installing .csv Files Using readcsv()
+I installed the .csv files in the dataset using readcsv(). I had a few issues loading them but I eventully figured out that when I uploaded the files, they couldn't be found by the read-csv function because they were too deep in the file path. I moved them from inside the .zip folder I uploaded to the path cloud/project and later ran the code. It worked! The code is shown below
+
+```{r install the files}
+dailyActivity <- read_csv("dailyActivity_merged.csv")
+minuteSleep <- read_csv("minuteSleep_merged.csv")
+weightLogInfo <- read_csv("weightLogInfo_merged.csv")
+```
+
+Next, to view the files:
+
+```{r view the files}
+glimpse(dailyActivity)
+glimpse(minuteSleep)
+glimpse(weightLogInfo)
+```
+
+## Clean the data
+The data is inconsistent. I'm going to summarize it. 
+
+First, I will summarize sleep to give me a daily overview.
+
+```{r summarize sleep}
+# Step 1: Convert date column
+minuteSleep <- minuteSleep %>%
+  mutate(date = mdy_hms(date))  # Fix datetime format
+
+# Step 2: Create a new column just for the "day"
+minuteSleep <- minuteSleep %>%
+  mutate(sleep_day = as_date(date))
+
+# Step 3: Summarize by user + date
+daily_sleep_summary <- minuteSleep %>%
+  group_by(Id, sleep_day) %>%
+  summarise(
+    total_minutes_asleep = sum(value, na.rm = TRUE),   # actual sleep
+    total_records = n(),                               # how many minute-rows = time in bed
+    .groups = "drop"
+  ) %>%
+  mutate(total_time_in_bed = total_records)  # if each row = 1 min
+
+#Step 4: Clean up column names
+daily_sleep_summary <- daily_sleep_summary %>%
+  rename(user_id = Id, date = sleep_day)
+```
+
+to check: 
+
+```{check sleep}
+glimpse(daily_sleep_summary)
+```
+
+Next, I'm going to format the date for dailyActivity and weightLogInfo. They re currently recognized as strings but I need them as dates. The weight_data table will be converted first to datetime and then to date. 
+
+```{r format dates}
+daily_activity <- dailyActivity %>%
+  mutate(ActivityDate = mdy(ActivityDate))
+
+weight_data <- weightLogInfo %>%
+  mutate(Date = mdy_hms(Date))
+
+#Let's extract just the date
+weight_data <- weight_data %>%
+  mutate(weight_day = as_date(Date))
+```
+
+## Merging daily_activity and daily_sleep_summary
+Right now, our dataset is not complete enough for analysis. We need to merge the activity and sleep tables to get a full picture. To do that, we'll run this code:
+
+```{r merge daily_activity and daily_sleep_summary datasets}
+activity_sleep <- left_join(
+  daily_activity,
+  daily_sleep_summary,
+  by = c("Id" = "user_id", "ActivityDate" = "date")
+)
+```
+
+I used a left join because it keeps all the records from activity, even if a day doesn't have any data for sleep. I didn't want to miss out on important activity info and some users (e.g me) don't wear their smartwatches to sleep.
+
+```{r to check} 
+glimpse(activity_sleep)
+```
+
+Now that the datasets have been merged, I want to explore whether there's any relationship between an active lifestyle or an inactive one and sleep duration.
+
+My personal theory is that people who live more active lifestyles tend to sleep better because their bodies have been used to capacity and need more rest to recover.
+
+But that’s just a hypothesis, and so we’re turning to the data. We’ll use correlation analysis to test whether activity levels (like steps taken, calories burned, and time spent sedentary) show any relationship with how much people sleep.
+
+The goal is to help Bellabeat understand how physical activity influences sleep and how the Leaf can support healthier routines through smart wellness tracking.
+
+Let's get into it:
+
+```{r correlation between steps and sleep duration}
+# This helps us check if more general daily movement leads to more sleep.
+cor_steps <- cor(activity_sleep$TotalSteps, activity_sleep$total_minutes_asleep, use = "complete.obs")
+cor_steps
+```
+The correlation between steps and sleep is: -0.1393673.
+This is a very weak negative correlation, so it’s not really strong enough to be useful on its own.
+It's basically saying "As people take more steps, they very slightly tend to sleep less."
+
+```{r correlation between VeryActiveMinutes and sleep duration}
+# This helps us check if workout activity leads to more sleep.
+cor_active <- cor(activity_sleep$VeryActiveMinutes, activity_sleep$total_minutes_asleep, use = "complete.obs")
+cor_active
+```
+
+The correlation between VeryActiveMinutes and sleep is: -0.1668336.
+This is also a very weak negative correlation and has  similar interpretation to the steps correlation. Let's keep going
+
+```{r correlation between calories and sleep duration}
+# This helps us check if using more energy throughout the day(not just workouts and steps) leads to more sleep.
+cor_calories <- cor(activity_sleep$Calories, activity_sleep$total_minutes_asleep, use = "complete.obs")
+cor_calories
+```
+
+The correlation between calories burned and sleep is:-0.1686864
+This is still a very weak negative correlation
+
+
+```{r correlation between  and sleep duration}
+# This helps us check if using more energy throughout the day(not just workouts and steps) leads to less sleep/lower sleep quality.
+cor_sedentary <- cor(activity_sleep$SedentaryMinutes, activity_sleep$total_minutes_asleep, use = "complete.obs")
+cor_sedentary
+```
+
+The correlation between sedentary and sleep is: -0.567461
+Now, this is a STRONG negative correlation! 
+This tells us that the more sedentary people are, the less they sleep.  That’s a statistically significant relationship
+
+
+## Visualisation 
+Next, we will create 4 scatter plots to show the relationships between:
+*Steps and Sleep
+*VeryActiveMinutes and Sleep
+*Calories and Sleep
+*SedentaryMinutes and Sleep
+
+We will be mapping the level of activity on the X axis and the total minutes asleep on the Y axis. We'll also add a trend line so it's easier to see the correlation at a glance. 
+
+First, we have to load ggplot2. It's the main package for data viz in R.
+
+```{r Scatter plot of total steps vs total sleep}
+p1<- ggplot(activity_sleep, aes(x = TotalSteps, y = total_minutes_asleep)) +
+  geom_point(alpha = 0.5, color = "#1b3a4c") +  # Plot the points with transparency
+  geom_smooth(method = "lm", se = FALSE, color = "#d8ab91") +  # Add a trend line
+  labs(
+    title = "Steps vs Sleep Duration",
+    x = "Total Steps",
+    y = "Total Minutes Asleep"
+  ) +
+  theme_minimal()  # Clean layout
+```
+
+There appears to be a very weak negative correlation between the number of steps taken in a day and the duration of sleep.
+This suggests that increasing steps doesn’t strongly impact sleep, at least not in a predictable way.
+ 
+``` {r Scatter plot of very active minutes vs total sleep}
+p2 <- ggplot(activity_sleep, aes(x = VeryActiveMinutes, y = total_minutes_asleep)) +
+  geom_point(alpha = 0.5, color = "#1b3a4c") +  # Plot each data point
+  geom_smooth(method = "lm", se = FALSE, color = "#d8ab91") +  # Add trend line
+  labs(
+    title = "Very Active Minutes vs Sleep Duration",
+    x = "Very Active Minutes",
+    y = "Total Minutes Asleep"
+  ) +
+  theme_minimal()
+```
+
+Similarly, the relationship between very active minutes and sleep is also weak and negative.
+Being highly active may not guarantee longer or better sleep. Other factors like stress, caffeine, or irregular routines may be stronger influences.
+
+```{r Scatter plot of calories burned vs total sleep}
+p3 <- ggplot(activity_sleep, aes(x = Calories, y = total_minutes_asleep)) +
+  geom_point(alpha = 0.5, color = "#1b3a4c") +  # Transparent points for readability
+  geom_smooth(method = "lm", se = FALSE, color = "#d8ab91") +  # Linear trend line
+  labs(
+    title = "Calories Burned vs Sleep Duration",
+    x = "Calories Burned",
+    y = "Total Minutes Asleep"
+  ) +
+  theme_minimal()
+```
+
+There’s a weak negative link between calories burned and sleep time.
+This suggests that using more energy during the day doesn’t always lead to longer or better sleep. People’s sleep patterns may still vary based on individual factors.
+
+
+```{r Scatter plot of sedentary time vs total sleep}
+p4 <- ggplot(activity_sleep, aes(x = SedentaryMinutes, y = total_minutes_asleep)) +
+  geom_point(alpha = 0.5, color = "#1b3a4c") +  # Plot points for each user-day
+  geom_smooth(method = "lm", se = FALSE, color = "#d8ab91") +  # Add line of best fit
+  labs(
+    title = "Sedentary Minutes vs Sleep Duration",
+    x = "Sedentary Minutes",
+    y = "Total Minutes Asleep"
+  ) +
+  theme_minimal()
+```
+
+Sedentary time has a much stronger negative correlation with sleep duration than the other variables.
+This suggests that users who spend more time being inactive during the day tend to sleep less.
+Reducing sedentary behavior could potentially improve sleep outcomes.
+
+
+
+
+
+To display the lists in a grid view, I'm going to be using the patchwork package.
+
+First, we install the package
+```{r Install patchwork package}
+install.packages("patchwork")
+library(patchwork)
+```
+ 
+Now we order the plots into a grid
+ 
+```{r Order the plots}
+ (p1 | p2) / (p3 | p4)
+```
+
+Finally, lets save the grid as a file so we can export it as an image.
+
+``` {r Save plots}
+# Save the grid plot
+final_plot <- (p1 | p2) / (p3 | p4)
+ggsave("activity_vs_sleep_grid.png", final_plot, width = 10, height = 8)
+
+# Save each individual plot
+ggsave("plot_steps_vs_sleep.png", plot = p1, width = 6, height = 4)
+ggsave("plot_active_minutes_vs_sleep.png", plot = p2, width = 6, height = 4)
+ggsave("plot_calories_vs_sleep.png", plot = p3, width = 6, height = 4)
+ggsave("plot_sedentary_vs_sleep.png", plot = p4, width = 6, height = 4)
+
+```
+
+Physical activity doesn’t show a strong direct relationship with sleep in this dataset. However, prolonged sedentary behavior appears to significantly reduce sleep duration. This is a key wellness concern Bellabeat can address.
+
+## Recommendations For Leaf 
+I recommend the following actions for Leaf:
+
+Since high sedentary time strongly correlates with lower sleep duration, the Leaf app should encourage movement throughout the day. Some options are:
+*Send personalized reminders to stand up and move if users have been sedentary too long.
+
+*Introduce “Daily Movement Goals” like a daily steps goal.
+
+*The app could reward consistent daily movement streaks with badges, levels, or community shoutouts.
+
+*Encourage users to set achievable activity challenges, especially during the day.
+
+*Market the Leaf as not just a tracker, but a lifestyle guide. Highlight how it supports users with sedentary jobs or busy routines by helping them reclaim healthy habits.
+
+
+The Bellabeat Leaf can go beyond tracking and actively support healthier habits by turning data into meaningful, personalized action.
+Reducing sedentary behavior may be the key to unlocking better sleep and overall wellbeing for Leaf users.
